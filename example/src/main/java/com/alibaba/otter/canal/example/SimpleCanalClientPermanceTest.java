@@ -2,17 +2,40 @@ package com.alibaba.otter.canal.example;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ArrayBlockingQueue;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alibaba.otter.canal.client.CanalConnector;
 import com.alibaba.otter.canal.client.CanalConnectors;
 import com.alibaba.otter.canal.client.impl.SimpleCanalConnector;
+import com.alibaba.otter.canal.common.utils.AddressUtils;
 import com.alibaba.otter.canal.protocol.Message;
 
-public class SimpleCanalClientPermanceTest {
+import io.netty.util.internal.StringUtil;
 
+public class SimpleCanalClientPermanceTest {
+	protected final static Logger             logger             = LoggerFactory.getLogger(SimpleCanalClientPermanceTest.class);
     public static void main(String args[]) {
-        String destination = "example";
-        String ip = "127.0.0.1";
+    	String destination = "example";
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.destination"))){
+        	destination = System.getProperty("canal.destination");
+        	logger.warn("destination:"+destination);
+        }
+        String ip = AddressUtils.getHostIp();
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.ip"))){
+        	ip = System.getProperty("canal.ip");
+        	logger.warn("ip:"+ip);
+        }
+        int port = 11111;
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.port"))){
+        	port = Integer.valueOf(System.getProperty("canal.port"));
+        	logger.warn("port:"+port);
+        }
         int batchSize = 1024;
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.batch.size"))){
+        	batchSize = Integer.valueOf(System.getProperty("canal.batch.size"));
+        	logger.warn("batchSize:"+batchSize);
+        }
         int count = 0;
         int sum = 0;
         int perSum = 0;
@@ -20,7 +43,7 @@ public class SimpleCanalClientPermanceTest {
         long end = 0;
         final ArrayBlockingQueue<Long> queue = new ArrayBlockingQueue<Long>(100);
         try {
-            final CanalConnector connector = CanalConnectors.newSingleConnector(new InetSocketAddress(ip, 11111),
+            final CanalConnector connector = CanalConnectors.newSingleConnector(new InetSocketAddress(ip, port),
                 destination,
                 "",
                 "");

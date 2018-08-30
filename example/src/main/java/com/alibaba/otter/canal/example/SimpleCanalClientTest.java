@@ -6,6 +6,8 @@ import com.alibaba.otter.canal.client.CanalConnector;
 import com.alibaba.otter.canal.client.CanalConnectors;
 import com.alibaba.otter.canal.common.utils.AddressUtils;
 
+import io.netty.util.internal.StringUtil;
+
 /**
  * 单机模式的测试例子
  * 
@@ -20,9 +22,22 @@ public class SimpleCanalClientTest extends AbstractCanalClientTest {
 
     public static void main(String args[]) {
         // 根据ip，直接创建链接，无HA的功能
-        String destination = "example";
+    	String destination = "example";
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.destination"))){
+        	destination = System.getProperty("canal.destination");
+        	logger.warn("destination:"+destination);
+        }
         String ip = AddressUtils.getHostIp();
-        CanalConnector connector = CanalConnectors.newSingleConnector(new InetSocketAddress(ip, 11111),
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.ip"))){
+        	ip = System.getProperty("canal.ip");
+        	logger.warn("ip:"+ip);
+        }
+        int port = 11111;
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.port"))){
+        	port = Integer.valueOf(System.getProperty("canal.port"));
+        	logger.warn("port:"+port);
+        }
+        CanalConnector connector = CanalConnectors.newSingleConnector(new InetSocketAddress(ip, port),
             destination,
             "",
             "");

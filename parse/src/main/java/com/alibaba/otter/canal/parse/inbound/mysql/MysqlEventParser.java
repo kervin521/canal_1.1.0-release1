@@ -30,8 +30,17 @@ import com.alibaba.otter.canal.parse.inbound.mysql.dbsync.TableMetaCache;
 import com.alibaba.otter.canal.parse.inbound.mysql.tsdb.DatabaseTableMeta;
 import com.alibaba.otter.canal.parse.support.AuthenticationInfo;
 import com.alibaba.otter.canal.protocol.CanalEntry;
+import com.alibaba.otter.canal.protocol.CanalEntry.EntryType;
+import com.alibaba.otter.canal.protocol.CanalEntry.EventType;
+import com.alibaba.otter.canal.protocol.CanalEntry.RowChange;
+import com.alibaba.otter.canal.protocol.CanalEntry.RowData;
 import com.alibaba.otter.canal.protocol.position.EntryPosition;
 import com.alibaba.otter.canal.protocol.position.LogPosition;
+import com.codahale.metrics.MetricsHolder;
+import com.codahale.metrics.Timer;
+import com.codahale.metrics.Timer.Context;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import com.taobao.tddl.dbsync.binlog.LogEvent;
 
 /**
@@ -70,9 +79,8 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
     // update by yishun.chen,特殊异常处理参数
     private int                  dumpErrorCount                    = 0;                 // binlogDump失败异常计数
     private int                  dumpErrorCountThreshold           = 2;                 // binlogDump失败异常计数阀值
-
-    // instance received binlog bytes
-    private final AtomicLong     receivedBinlogBytes               = new AtomicLong(0L);
+    private final Timer etimer = MetricsHolder.timer("Canal-Entry-Timer");
+    private final Timer rtimer = MetricsHolder.timer("Canal-Row-Timer");
 
     protected ErosaConnection buildErosaConnection() {
         return buildMysqlConnection(this.runningInfo);
@@ -787,6 +795,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                         }
 
                         lastPosition = buildLastPosition(entry);
+                        monitor(logfilename,logfileoffset,entry);
                     } catch (Throwable e) {
                         processSinkError(e, lastPosition, searchBinlogFile, 4L);
                     }
@@ -818,7 +827,67 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
 
         super.processDumpError(e);
     }
-
+    /**
+     * Canal Dump 监控
+     * @author yi.zhang
+     * @param binlog	binlog
+     * @param postion	postion
+     * @param entry		entry
+     */
+    public void monitor(String binlog,long postion,CanalEntry.Entry entry){
+    	if(entry==null)return;
+    	try {
+			Context ctx = etimer.time();
+			try{
+				if(entry.getEntryType()==EntryType.ROWDATA){
+					ByteString data = entry.getStoreValue();
+					RowChange store;
+					try {
+						store = RowChange.parseFrom(data);
+					} catch (InvalidProtocolBufferException e) {
+						logger.error("[Canal]parse event has error,data:"+entry.toString(),e);
+						return;
+					}
+					if(store.getEventType()==EventType.QUERY||store.hasIsDdl()){
+						logger.warn("[Canal]sql:"+store.getSql());
+						return;
+					}
+					String database = entry.getHeader().getSchemaName();
+					String table = entry.getHeader().getTableName();
+					List<RowData> rows = store.getRowDatasList();
+					if(rows!=null&&!rows.isEmpty()){
+						for(RowData row:rows){
+							long size = rtimer.getCount();
+							Context rctx = rtimer.time();
+					    	try{
+					    		int bcc = row.getBeforeColumnsCount();
+					    		int acc = row.getAfterColumnsCount();
+					    		String opt = "";
+					    		if(bcc>0&&acc>0){
+					    			opt = "Update";
+					    		}else{
+					    			if(acc>0){
+					    				opt = "Insert";
+					    			}else{
+					    				opt = "Delete";
+					    			}
+					    		}
+					    		if(size>0&&size%10000==0){
+					    			logger.info("[Canal]Dump Monitor{binlog:"+binlog+",postion:"+postion+",database:"+database+",table:"+table+",opt:"+opt+"}");
+					    		}
+					    	}finally{
+					    		rctx.close();
+					    	}
+						}
+					}
+				}
+			}finally{
+				ctx.close();
+			}
+		} catch (Exception e) {
+			logger.error("[Canal]Dump Monitor Error",e);
+		}
+    }
     public void setSupportBinlogFormats(String formatStrs) {
         String[] formats = StringUtils.split(formatStrs, ',');
         if (formats != null) {

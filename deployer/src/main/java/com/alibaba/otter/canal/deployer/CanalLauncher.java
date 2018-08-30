@@ -2,10 +2,14 @@ package com.alibaba.otter.canal.deployer;
 
 import java.io.FileInputStream;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.codahale.metrics.ConsoleReporter;
+import com.codahale.metrics.MetricsHolder;
 
 /**
  * canal独立版本启动的入口类
@@ -32,7 +36,8 @@ public class CanalLauncher {
             } else {
                 properties.load(new FileInputStream(conf));
             }
-
+            final ConsoleReporter console = MetricsHolder.console();
+            console.start(5, TimeUnit.SECONDS);
             logger.info("## start the canal server.");
             final CanalController controller = new CanalController(properties);
             controller.start();
@@ -43,6 +48,7 @@ public class CanalLauncher {
                     try {
                         logger.info("## stop the canal server");
                         controller.stop();
+                        console.stop();
                     } catch (Throwable e) {
                         logger.warn("##something goes wrong when stopping canal Server:", e);
                     } finally {

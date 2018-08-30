@@ -21,6 +21,11 @@ import org.springframework.util.CollectionUtils;
 import com.alibaba.otter.canal.common.zookeeper.running.ServerRunningMonitor;
 import com.alibaba.otter.canal.common.zookeeper.running.ServerRunningMonitors;
 import com.alibaba.otter.canal.protocol.CanalEntry.Entry;
+import com.alibaba.otter.canal.protocol.CanalEntry.EntryType;
+import com.alibaba.otter.canal.protocol.CanalEntry.EventType;
+import com.alibaba.otter.canal.protocol.CanalEntry.RowChange;
+import com.alibaba.otter.canal.protocol.CanalEntry.RowData;
+import com.alibaba.otter.canal.protocol.CanalEntry;
 import com.alibaba.otter.canal.protocol.CanalPacket;
 import com.alibaba.otter.canal.protocol.CanalPacket.ClientAck;
 import com.alibaba.otter.canal.protocol.CanalPacket.ClientRollback;
@@ -34,6 +39,9 @@ import com.alibaba.otter.canal.protocol.ClientIdentity;
 import com.alibaba.otter.canal.protocol.Message;
 import com.alibaba.otter.canal.server.embedded.CanalServerWithEmbedded;
 import com.alibaba.otter.canal.server.netty.NettyUtils;
+import com.codahale.metrics.MetricsHolder;
+import com.codahale.metrics.Timer;
+import com.codahale.metrics.Timer.Context;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.WireFormat;
@@ -42,7 +50,8 @@ public class SessionHandler extends SimpleChannelHandler {
 
     private static final Logger     logger = LoggerFactory.getLogger(SessionHandler.class);
     private CanalServerWithEmbedded embeddedServer;
-
+    private final Timer etimer = MetricsHolder.timer("Client-Entry-Timer");
+    private final Timer rtimer = MetricsHolder.timer("Client-Row-Timer");
     public SessionHandler(){
     }
 
@@ -172,7 +181,10 @@ public class SessionHandler extends SimpleChannelHandler {
                             // message
                             output.writeInt64(1, message.getId());
                             for (int i = 0; i < rowEntries.size(); i++) {
-                                output.writeBytes(2, rowEntries.get(i));
+                            	ByteString row = rowEntries.get(i);
+                                output.writeBytes(2, row);
+                                Entry entry = CanalEntry.Entry.parseFrom(row);
+                                monitor(entry);
                             }
                             output.checkNoSpaceLeft();
                             NettyUtils.write(ctx.getChannel(), body, new ChannelFutureAggregator(get.getDestination(),
@@ -194,6 +206,7 @@ public class SessionHandler extends SimpleChannelHandler {
                                 } else if (!CollectionUtils.isEmpty(message.getEntries())) {
                                     for (Entry entry : message.getEntries()) {
                                         messageBuilder.addMessages(entry.toByteString());
+                                        monitor(entry);
                                     }
                                 }
                             }
@@ -315,5 +328,65 @@ public class SessionHandler extends SimpleChannelHandler {
     public void setEmbeddedServer(CanalServerWithEmbedded embeddedServer) {
         this.embeddedServer = embeddedServer;
     }
-
+    /**
+     * Canal Client 监控
+     * @author yi.zhang
+     * @param binlog	binlog
+     * @param postion	postion
+     * @param entry		entry
+     */
+    public void monitor(CanalEntry.Entry entry){
+    	if(entry==null)return;
+    	try {
+			Context ctx = etimer.time();
+			try{
+				if(entry.getEntryType()==EntryType.ROWDATA){
+					ByteString data = entry.getStoreValue();
+					RowChange store;
+					try {
+						store = RowChange.parseFrom(data);
+					} catch (InvalidProtocolBufferException e) {
+						logger.error("[Canal]parse event has error,data:"+entry.toString(),e);
+						return;
+					}
+					if(store.getEventType()==EventType.QUERY||store.hasIsDdl()){
+						logger.warn("[Canal]sql:"+store.getSql());
+						return;
+					}
+					String database = entry.getHeader().getSchemaName();
+					String table = entry.getHeader().getTableName();
+					List<RowData> rows = store.getRowDatasList();
+					if(rows!=null&&!rows.isEmpty()){
+						for(RowData row:rows){
+							long size = rtimer.getCount();
+							Context rctx = rtimer.time();
+					    	try{
+					    		int bcc = row.getBeforeColumnsCount();
+					    		int acc = row.getAfterColumnsCount();
+					    		String opt = "";
+					    		if(bcc>0&&acc>0){
+					    			opt = "Update";
+					    		}else{
+					    			if(acc>0){
+					    				opt = "Insert";
+					    			}else{
+					    				opt = "Delete";
+					    			}
+					    		}
+					    		if(size>0&&size%10000==0){
+					    			logger.info("[Canal]Client Monitor{database:"+database+",table:"+table+",opt:"+opt+"}");
+					    		}
+					    	}finally{
+					    		rctx.close();
+					    	}
+						}
+					}
+				}
+			}finally{
+				ctx.close();
+			}
+		} catch (Exception e) {
+			logger.error("[Canal]Dump Monitor Error",e);
+		}
+    }
 }

@@ -10,8 +10,15 @@ case "`uname`" in
 		;;
 esac
 base=${bin_abs_path}/..
-client_mode="Simple"
+client_mode="Cluster"
 logback_configurationFile=$base/conf/logback.xml
+canal.destination=example
+canal.zookeeper=127.0.0.1:2181
+canal.batch.size=5120
+canal.sleep.time=1
+canal.ip=127.0.0.1
+canal.port=11111
+
 export LANG=en_US.UTF-8
 export BASE=$base
 
@@ -67,6 +74,7 @@ fi
 
 JAVA_OPTS=" $JAVA_OPTS -Djava.awt.headless=true -Djava.net.preferIPv4Stack=true -Dfile.encoding=UTF-8"
 CANAL_OPTS="-DappName=otter-canal-example -Dlogback.configurationFile=$logback_configurationFile"
+CANAL_OPTS=$CANAL_OPTS:" -Dcanal.destination=${canal.destination} -Dcanal.zookeeper=${canal.zookeeper} -Dcanal.batch.size=${canal.batch.size} -Dcanal.sleep.time=${canal.sleep.time} -Dcanal.ip=${canal.ip} -Dcanal.port=${canal.port}"
 
 if [ -e $logback_configurationFile ]
 then 

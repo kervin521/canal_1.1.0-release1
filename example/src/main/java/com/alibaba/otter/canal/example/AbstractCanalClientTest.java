@@ -4,6 +4,7 @@ import java.io.UnsupportedEncodingException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.SystemUtils;
@@ -23,8 +24,16 @@ import com.alibaba.otter.canal.protocol.CanalEntry.RowChange;
 import com.alibaba.otter.canal.protocol.CanalEntry.RowData;
 import com.alibaba.otter.canal.protocol.CanalEntry.TransactionBegin;
 import com.alibaba.otter.canal.protocol.CanalEntry.TransactionEnd;
+import com.codahale.metrics.ConsoleReporter;
+import com.codahale.metrics.MetricsHolder;
+import com.codahale.metrics.Timer;
+import com.codahale.metrics.Timer.Context;
+import com.alibaba.otter.canal.protocol.CanalEntry;
 import com.alibaba.otter.canal.protocol.Message;
+import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
+
+import io.netty.util.internal.StringUtil;
 
 /**
  * 测试基类
@@ -50,7 +59,10 @@ public class AbstractCanalClientTest {
     protected static String                   row_format         = null;
     protected static String                   transaction_format = null;
     protected String                          destination;
-
+    protected static volatile ConsoleReporter console = MetricsHolder.console();
+    private static final Timer mtimer = MetricsHolder.timer("Canal-Client-Message-Timer");
+    private static final Timer etimer = MetricsHolder.timer("Canal-Client-Entry-Timer");
+    private static final Timer rtimer = MetricsHolder.timer("Canal-Client-Row-Timer");
     static {
         context_format = SEP + "****************************************************" + SEP;
         context_format += "* Batch Id: [{}] ,count : [{}] , memsize : [{}] , Time : {}" + SEP;
@@ -79,6 +91,7 @@ public class AbstractCanalClientTest {
 
     protected void start() {
         Assert.notNull(connector, "connector is null");
+        console.start(5, TimeUnit.SECONDS);
         thread = new Thread(new Runnable() {
 
             public void run() {
@@ -95,6 +108,7 @@ public class AbstractCanalClientTest {
         if (!running) {
             return;
         }
+        console.close();
         connector.stopRunning();
         running = false;
         if (thread != null) {
@@ -110,6 +124,15 @@ public class AbstractCanalClientTest {
 
     protected void process() {
         int batchSize = 5 * 1024;
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.batch.size"))){
+        	batchSize = Integer.valueOf(System.getProperty("canal.batch.size"));
+        	logger.warn("batchSize:"+batchSize);
+        }
+        int sleepTime = 0;
+        if(!StringUtil.isNullOrEmpty(System.getProperty("canal.sleep.time"))){
+        	sleepTime = Integer.valueOf(System.getProperty("canal.sleep.time"));
+        	logger.warn("sleepTime:"+sleepTime);
+        }
         while (running) {
             try {
                 MDC.put("destination", destination);
@@ -120,13 +143,20 @@ public class AbstractCanalClientTest {
                     long batchId = message.getId();
                     int size = message.getEntries().size();
                     if (batchId == -1 || size == 0) {
-                        // try {
-                        // Thread.sleep(1000);
-                        // } catch (InterruptedException e) {
-                        // }
+                    	if(sleepTime>0){
+                    		try {
+                           	 Thread.sleep(sleepTime*1000);
+                            } catch (InterruptedException e) {
+                            }	
+                    	}
                     } else {
-                        printSummary(message, batchId, size);
-                        printEntry(message.getEntries());
+                    	Context ctx = mtimer.time();
+                    	try{
+	                        printSummary(message, batchId, size);
+	                        printEntry(message.getEntries());
+                    	}finally{
+                    		ctx.close();
+                    	}
                     }
 
                     connector.ack(batchId); // 提交确认
@@ -248,6 +278,7 @@ public class AbstractCanalClientTest {
                     }
                 }
             }
+            monitor(entry);
         }
     }
 
@@ -298,5 +329,63 @@ public class AbstractCanalClientTest {
     public void setConnector(CanalConnector connector) {
         this.connector = connector;
     }
-
+    /**
+     * Canal Client 监控
+     * @author yi.zhang
+     * @param entry		entry
+     */
+    public void monitor(CanalEntry.Entry entry){
+    	if(entry==null)return;
+    	try {
+			Context ctx = etimer.time();
+			try{
+				if(entry.getEntryType()==EntryType.ROWDATA){
+					ByteString data = entry.getStoreValue();
+					RowChange store;
+					try {
+						store = RowChange.parseFrom(data);
+					} catch (InvalidProtocolBufferException e) {
+						logger.error("[Canal]parse event has error,data:"+entry.toString(),e);
+						return;
+					}
+					if(store.getEventType()==EventType.QUERY||store.hasIsDdl()){
+						logger.warn("[Canal]sql:"+store.getSql());
+						return;
+					}
+					String database = entry.getHeader().getSchemaName();
+					String table = entry.getHeader().getTableName();
+					List<RowData> rows = store.getRowDatasList();
+					if(rows!=null&&!rows.isEmpty()){
+						for(RowData row:rows){
+							long size = rtimer.getCount();
+							Context rctx = rtimer.time();
+					    	try{
+					    		int bcc = row.getBeforeColumnsCount();
+					    		int acc = row.getAfterColumnsCount();
+					    		String opt = "";
+					    		if(bcc>0&&acc>0){
+					    			opt = "Update";
+					    		}else{
+					    			if(acc>0){
+					    				opt = "Insert";
+					    			}else{
+					    				opt = "Delete";
+					    			}
+					    		}
+					    		if(size>0&&size%10000==0){
+					    			logger.info("[Canal]Client Monitor{database:"+database+",table:"+table+",opt:"+opt+"}");
+					    		}
+					    	}finally{
+					    		rctx.close();
+					    	}
+						}
+					}
+				}
+			}finally{
+				ctx.close();
+			}
+		} catch (Exception e) {
+			logger.error("[Canal]Dump Monitor Error",e);
+		}
+    }
 }
