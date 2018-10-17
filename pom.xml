@@ -95,6 +95,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!--maven properties-->
         <maven.test.skip>true</maven.test.skip>
+	<maven.javadoc.skip>true</maven.javadoc.skip>
         <downloadSources>true</downloadSources>
         <!-- compiler settings properties -->
         <java_source_version>1.7</java_source_version>
