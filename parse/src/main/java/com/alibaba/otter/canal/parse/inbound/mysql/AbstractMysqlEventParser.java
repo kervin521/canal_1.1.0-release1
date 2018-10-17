@@ -40,6 +40,7 @@ public abstract class AbstractMysqlEventParser extends AbstractEventParser {
     protected boolean              filterTableError          = false;
     protected boolean              useDruidDdlFilter         = true;
     private final AtomicLong       eventsPublishBlockingTime = new AtomicLong(0L);
+	protected final AtomicLong     receivedBinlogBytes       = new AtomicLong(0L);
 
     protected BinlogParser buildParser() {
         LogEventConvert convert = new LogEventConvert();
